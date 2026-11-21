@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "color/no-raw-hex",
+  "version": "1.0.0",
+  "title": "Use color tokens, not raw hex values",
+  "description": "Component styles must reference design tokens (var(--color-*)). Raw hex values bypass theming and dark mode. Token definitions under src/tokens/ are exempt.",
+  "severity": "error",
+  "appliesTo": {
+    "paths": ["src/**/*.css"],
+    "exclude": ["src/tokens/**"]
+  },
+  "check": {
+    "type": "forbid-pattern",
+    "pattern": "#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\\b",
+    "allow": ["mottlefin-allow color/no-raw-hex"],
+    "scope": "changed-lines",
+    "message": "Raw hex color. Use a design token, e.g. var(--color-danger)."
+  }
+}

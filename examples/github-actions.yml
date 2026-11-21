@@ -1,0 +1,84 @@
+# Mottlefin design-system checks on pull requests.
+#
+# Mottlefin is checked out into .mottlefin-tool from a placeholder repository.
+# Replace `your-org/mottlefin` with the repository that hosts your copy. If the
+# repository is private, add a token input (for example
+# `token: ${{ secrets.MOTTLEFIN_READ_TOKEN }}`) to the tool checkout step.
+#
+# The run step captures mottlefin's exit code instead of failing immediately, so
+# the report steps always run. The final step exits with that code, so the job
+# status matches mottlefin's result.
+
+name: mottlefin
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mottlefin:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history is required: the diff needs the base commit. A shallow clone
+      # makes mottlefin fall back to full-fallback mode, and the report says so.
+      # The head SHA is checked out so rules are read from the PR's version.
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Mottlefin has no npm dependencies, so there is nothing to install.
+      - name: Check out mottlefin
+        uses: actions/checkout@v4
+        with:
+          repository: your-org/mottlefin
+          path: .mottlefin-tool
+
+      - name: Run mottlefin
+        id: mottlefin
+        shell: bash
+        run: |
+          set +e
+          node .mottlefin-tool/bin/mottlefin.js run \
+            --repo "$GITHUB_WORKSPACE" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --strict \
+            --report-json "$RUNNER_TEMP/mottlefin/report.json" \
+            --report-md "$RUNNER_TEMP/mottlefin/report.md"
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "mottlefin exit code: $code"
+
+      - name: Write step summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/mottlefin/report.md" ]; then
+            cat "$RUNNER_TEMP/mottlefin/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "mottlefin did not produce a Markdown report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mottlefin-evidence
+          path: ${{ runner.temp }}/mottlefin/
+          if-no-files-found: warn
+
+      # Last step: the job's final status is mottlefin's exit code.
+      - name: Exit with mottlefin's code
+        if: always()
+        shell: bash
+        # Falls back to 2 (environment error) if the run step died before recording a code.
+        run: exit "${{ steps.mottlefin.outputs.code || '2' }}"
