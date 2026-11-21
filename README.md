@@ -1,47 +1,54 @@
 # Mottlefin
 
-Mottlefin runs design-system checks on UI changes. Given a Git diff and a set of versioned rules, it selects the rules that apply, explains why each one ran or was skipped, runs them, and writes an evidence report tied to the rule version and the commit. Selection and execution are deterministic: no model calls, no network, no runtime dependencies.
+Mottlefin checks UI changes against your design-system rules.
+
+You write a rule once: what it checks and which files it applies to. On every change, Mottlefin reads the Git diff, runs only the rules that apply, and explains why each rule ran or was skipped. The result is an evidence report tied to the exact rule version and commit.
+
+Mottlefin is deterministic and runs offline. It makes no model calls and has no npm dependencies.
+
+```
+FAILED  color/no-raw-hex@1.0.0  (sha256:b7ebd614…, error)
+  Use color tokens, not raw hex values
+  Why it ran: [changed-file-matches] src/components/Button.css changed and matches src/**/*.css.
+  ✗ src/components/Button.css:8:15  #ff0000  Raw hex color. Use a design token, e.g. var(--color-danger).
+      background: #ff0000;
+
+Result: 0 passed, 1 failed, 0 skipped (inapplicable), 0 unable to evaluate, 0 coverage gaps
+Blocking failures: color/no-raw-hex
+```
+
+## Requirements
+
+- Node.js 20 or later
+- `git` on your `PATH`
 
 ## Install
 
-Requires Node.js 20 or later and `git` on the PATH. There are no npm dependencies.
-
 ```sh
-git clone <this repo> mottlefin
+git clone https://github.com/<you>/mottlefin.git
 cd mottlefin
-
-# Option 1: run in place
-node bin/mottlefin.js --help
-
-# Option 2: put `mottlefin` on your PATH
-npm link
-mottlefin --help
+npm link          # optional: puts `mottlefin` on your PATH
 ```
 
-## Quick start
+Without `npm link`, run `node /path/to/mottlefin/bin/mottlefin.js` wherever this README says `mottlefin`.
 
-Build a throwaway repo with a few known commits, then check the `regression` commit against `base`:
+## Getting started
+
+Run these steps from the root of the repository you want to check.
+
+**1. Add a rule.** Rules are JSON files in `.mottlefin/rules/`. This rule bans raw hex colors in component CSS but allows them in the token definitions:
 
 ```sh
-node fixture/setup.mjs /tmp/mf-demo
-node bin/mottlefin.js run --repo /tmp/mf-demo --base base --head regression
+mkdir -p .mottlefin/rules
 ```
 
-The `regression` commit adds a raw hex color to `src/components/Button.css`. The rule `color/no-raw-hex` is selected, reports `failed` at the exact line, and the command exits with `1`.
-
-## Writing a rule
-
-Rules are JSON files, one per rule, in `<repo>/.mottlefin/rules` (searched recursively for `*.json`). Use `--rules <dir>` to point elsewhere.
-
-The fixture rule, `fixture/rules/color-no-raw-hex.json`:
+`.mottlefin/rules/color-no-raw-hex.json`:
 
 ```json
 {
-  "schema": 1,
   "id": "color/no-raw-hex",
   "version": "1.0.0",
   "title": "Use color tokens, not raw hex values",
-  "description": "Component styles must reference design tokens (var(--color-*)). Raw hex values bypass theming and dark mode. Token definitions under src/tokens/ are exempt.",
   "severity": "error",
   "appliesTo": {
     "paths": ["src/**/*.css"],
@@ -50,102 +57,92 @@ The fixture rule, `fixture/rules/color-no-raw-hex.json`:
   "check": {
     "type": "forbid-pattern",
     "pattern": "#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\\b",
-    "allow": ["mottlefin-allow color/no-raw-hex"],
-    "scope": "changed-lines",
     "message": "Raw hex color. Use a design token, e.g. var(--color-danger)."
   }
 }
 ```
 
-What each part does:
+**2. Validate it.**
 
-- `id`: stable identifier, lowercase segments separated by `/` (`color/no-raw-hex`). Must be unique across the rules dir.
-- `version`: semver `x.y.z`. Recorded in every result. See versioning below.
-- `title`, `description`: human text shown in reports.
-- `severity`: `error` (default) or `warn`. A failed `warn` rule does not affect the exit code.
-- `appliesTo.paths`: required glob list. Which files the rule is about.
-- `appliesTo.exclude`: glob list of files to skip (here, the token definitions).
-- `appliesTo.content`: optional regex source. A matching file is a target only if its contents match. Set to `null` or omit.
-- `appliesTo.triggers`: optional glob list. A change to any matching file (including a deletion) selects the rule for all of its files.
-- `check.type`: the check to run. `forbid-pattern` is the only one in this version.
-- `check.pattern`: the regex for `forbid-pattern`. Every match on a line is a finding.
-- `check.flags`: regex flags. The `g` flag is always added. The fixture omits it.
-- `check.allow`: regexes. A line matching any of them produces no finding. The fixture uses this as a per-line escape hatch.
-- `check.scope`: `changed-lines` (default) or `file`. See "Which violations count" below.
-- `check.message`: text shown with each finding.
+```sh
+mottlefin validate
+```
 
-Unknown keys at the top level or inside `appliesTo` are load errors. Use `mottlefin validate` to check rule files without running anything.
+**3. Run it.**
 
-**Glob syntax:** `*` matches any run of characters except `/`; `?` matches one character except `/`; `**/` matches zero or more directories; a trailing `**` matches anything; `{a,b}` is alternation (no nesting). Everything else is literal. Globs are anchored at both ends, case-sensitive, and do not special-case dotfiles. Paths are repo-relative with no leading `./`.
+```sh
+mottlefin run                            # last commit (HEAD~1..HEAD)
+mottlefin run --worktree                 # your uncommitted changes
+mottlefin run --base main --head HEAD    # a whole branch
+mottlefin run --full                     # every rule over every file (audit)
+```
 
-**Versioning:**
+Commit the `.mottlefin/rules/` directory, so that everyone and CI run the same rules.
 
-- Bump `version` when the rule's check behavior changes: what it flags (`pattern`, `flags`, `allow`, `scope`) or which files it selects (`appliesTo`). Evidence reports record the version, so a bump shows when behavior changed.
-- Any byte change to the file changes its `digest` (`sha256:` plus the hash of the raw file), even without a version bump. The report records the digest, so the exact content that ran is always known. Treat the digest as the authoritative identity and `version` as the human-readable label.
+## Results
 
-## How selection works
-
-Mottlefin resolves `--head` (default `HEAD`) and `--base` (default `HEAD~1`; `HEAD` with `--worktree`). The diff is taken from `merge-base(base, head)` to `head`.
-
-Three modes:
-
-| mode | when | what runs |
-|---|---|---|
-| `diff` | normal case | Rules are selected by the applicability rules below. |
-| `full` | `--full` | Every rule runs over every file it targets. |
-| `full-fallback` | the base cannot be resolved (shallow clone, first commit) | Every rule runs as in `full`. The report has a `diff-unavailable` notice. |
-
-**Applicability in diff mode**, evaluated in this order for each rule:
-
-1. The rule file itself is in the diff (added, modified, renamed, or copied). The rule is selected with reason `rule-changed` and runs over its full scope: all files matching its paths, and every violation counts.
-2. Any changed file matches `appliesTo.triggers`, including deleted files. The rule is selected with reason `trigger-changed`, full scope, and every violation counts.
-3. Otherwise, look at changed files with status added, modified, renamed, copied, or type-changed whose new path matches `appliesTo.paths` and not `appliesTo.exclude`:
-   - With no content gate, each such file is a target.
-   - With a content gate, the file is read. If it matches, it is a target. If it does not, it is not. If it cannot be read, the file gets an `applicability-unknown` coverage gap.
-   - One or more targets: selected, reason `changed-file-matches`, certainty `certain`.
-   - No targets but at least one `applicability-unknown` gap: selected, reason `applicability-uncertain`, certainty `uncertain`. The runner then reports `unable_to_evaluate`.
-   - Otherwise not selected, with the first applicable reason: `only-deleted-files-match`, `content-gate-not-matched`, or `no-changed-file-matches`.
-
-Full scope (`full`, `full-fallback`, `rule-changed`, `trigger-changed`): targets are all files in the snapshot matching paths minus exclude, with the content gate applied the same way. If nothing matches and there are no gaps, the rule is not selected with reason `no-files-match`.
-
-**Reason codes**
-
-| code | selected? | meaning |
-|---|---|---|
-| `full-run` | yes (certain) | `--full` mode; every matching file. |
-| `diff-unavailable` | yes (uncertain) | Base unresolved; full-fallback mode. |
-| `rule-changed` | yes | The rule file changed in this diff. |
-| `trigger-changed` | yes | A trigger file changed in this diff. |
-| `changed-file-matches` | yes (certain) | One or more changed files are targets. |
-| `applicability-uncertain` | yes (uncertain) | No targets could be confirmed; an unreadable file could be one. |
-| `no-changed-file-matches` | no | No changed file matches the rule's paths. |
-| `only-deleted-files-match` | no | Only deleted files match. |
-| `content-gate-not-matched` | no | Matching files do not satisfy `appliesTo.content`. |
-| `no-files-match` | no | Full scope, and no file in the snapshot matches. |
-
-**Coverage gaps.** A gap is a file the rule should have covered but could not. Gaps are never a silent pass. They are listed per rule and counted in the summary.
-
-| code | source | meaning |
-|---|---|---|
-| `applicability-unknown` | selector | A content-gated file could not be read, so it may or may not be a target. |
-| `changed-lines-unknown` | selector | Added lines for a file are unknown (binary or unparseable), so every finding in it counts. |
-| `file-unreadable` | runner | A target could not be read. |
-| `check-error` | runner | The check threw on a target. |
-
-**Which violations count.** With `scope: "changed-lines"` in diff mode, a finding counts only if it is on a line the change added or modified. Other findings are listed as pre-existing violations. They are informational and never fail the rule. With `scope: "file"`, in full mode, or when added lines are unknown, every finding counts.
-
-## Statuses
+Every rule gets exactly one status:
 
 | status | meaning |
 |---|---|
-| `passed` | The check ran on at least one file and found no counting violation. |
-| `failed` | The check found at least one counting violation. |
-| `skipped_inapplicable` | The selector determined the rule does not apply to this change. The check did not run. |
-| `unable_to_evaluate` | The rule should have run but could not: invalid rule, unsupported check type, bad check config, or no readable target. |
+| `passed` | The check ran and found nothing. |
+| `failed` | The check found a violation. |
+| `skipped_inapplicable` | The change doesn't touch anything the rule covers. The report says why. |
+| `unable_to_evaluate` | The rule should have run but couldn't, for example an invalid rule file, an unsupported check type, or an unreadable file. |
 
-`passed` and `failed` results may also carry coverage gaps.
+A result can also list **coverage gaps**: files the rule should have checked but couldn't, such as a binary file matching `*.css`. A gap is never reported as a pass.
 
-## Commands and flags
+**Only new problems fail a change.** In a normal diff run, a violation counts only if it is on a line the change added or modified. Existing violations elsewhere in a touched file are reported as pre-existing and do not fail the rule. Use `--full` to audit everything, or set `"scope": "file"` on a rule to always check whole files.
+
+## Writing rules
+
+| field | required | description |
+|---|---|---|
+| `id` | yes | Lowercase, `/`-separated, unique (`color/no-raw-hex`). |
+| `version` | yes | `MAJOR.MINOR.PATCH`. Bump it when the rule's behavior changes. |
+| `title` | yes | Shown in reports. |
+| `description` | no | Longer explanation. |
+| `severity` | no | `error` (default) blocks. `warn` is reported but never blocks. |
+| `appliesTo.paths` | yes | Globs for the files the rule is about. |
+| `appliesTo.exclude` | no | Globs to leave out. |
+| `appliesTo.content` | no | A regex. A matching file is checked only if its contents match, e.g. only files that import your UI library. |
+| `appliesTo.triggers` | no | Globs for files that, when changed, re-check *every* file the rule covers, e.g. your token definitions. |
+| `check.type` | yes | `forbid-pattern` (the only type so far). |
+| `check.pattern` | yes | A regex. Each match on a line is a violation. |
+| `check.flags` | no | Regex flags from `imsu`. |
+| `check.allow` | no | Regexes. Lines matching any of them are ignored, e.g. an inline `mottlefin-allow color/no-raw-hex` comment. |
+| `check.scope` | no | `changed-lines` (default) or `file`. |
+| `check.message` | no | Shown with each violation. |
+
+Unknown fields are rejected, so typos don't silently disable a rule.
+
+**Globs:**
+- `*` matches within one directory.
+- `**/` matches any number of directories.
+- `?` matches one character.
+- `{css,scss}` matches either alternative.
+
+Paths are relative to the repo root.
+
+**Versions and digests.** Each result records the rule's `version` and a `sha256` digest of the rule file. The version is the label people read. The digest proves exactly which rule content ran, even if someone edited the file without bumping the version.
+
+## How Mottlefin decides what runs
+
+For each rule, Mottlefin applies the first of these that is true:
+
+1. **The rule file changed.** It re-checks every file the rule covers.
+2. **A trigger file changed.** It re-checks every file the rule covers.
+3. **A changed file matches the rule's paths.** It checks the changed files.
+4. **Otherwise** the rule is skipped, with the reason. Possible reasons:
+   - no changed file matches
+   - only deleted files match
+   - the content filter didn't match
+
+When applicability can't be determined, Mottlefin runs anyway and says so. For example, a file can match the paths, but the content filter can't be applied because the file can't be read. If the base commit can't be found at all (a shallow clone, say), every rule runs, results are marked `uncertain`, and the report carries a `diff-unavailable` notice.
+
+The report states every decision as a reason code. The JSON gives the exact codes.
+
+## Command reference
 
 ```
 mottlefin run [--base <ref>] [--head <ref>] [--worktree] [--full] [--strict]
@@ -155,141 +152,72 @@ mottlefin validate [--rules <dir>] [--repo <dir>]
 mottlefin --help | --version
 ```
 
-- `--base <ref>`: base to diff from. Default `HEAD~1` (`HEAD` with `--worktree`).
-- `--head <ref>`: head to evaluate. Default `HEAD`.
-- `--worktree`: compare the base against the working tree (staged, unstaged, and untracked non-ignored files) instead of `--head`.
-- `--full`: run every rule over every file it targets, ignoring the diff.
-- `--strict`: also exit `1` on `unable_to_evaluate` results and coverage gaps.
-- `--rules <dir>`: rules directory. Default `<repo>/.mottlefin/rules`.
-- `--repo <dir>`: repository to check.
-- `--format text|json|markdown`: format written to stdout.
-- `--report-json <file>`, `--report-md <file>`: also write the report to these files.
-- `validate`: load and check the rule files only.
+| flag | default | description |
+|---|---|---|
+| `--base` | `HEAD~1` (`HEAD` with `--worktree`) | Compare from here. Mottlefin uses the merge base of `--base` and `--head`. |
+| `--head` | `HEAD` | The commit to check. |
+| `--worktree` | off | Check uncommitted changes, including untracked files, instead of a commit. |
+| `--full` | off | Ignore the diff and run every rule over every file it covers. |
+| `--strict` | off | Also fail on `unable_to_evaluate` results and coverage gaps. |
+| `--rules` | `.mottlefin/rules` | Rules directory. |
+| `--repo` | current directory | Repository to check. |
+| `--format` | `text` | Output format on stdout. |
+| `--report-json`, `--report-md` | none | Also write the report to a file. |
 
-`run` always reads rules from the working tree (see limitations).
-
-## Exit codes
+**Exit codes:**
 
 | code | meaning |
 |---|---|
-| `0` | No blocking result. |
-| `1` | A blocking result: a `failed` rule with `error` severity. With `--strict`, also any `unable_to_evaluate` result or coverage gap. `validate` exits `1` if any rule is invalid. |
-| `2` | Usage or environment error: not a git repo, rules dir missing, head unresolvable, unknown flag. |
+| `0` | Nothing blocking. |
+| `1` | A rule with `error` severity failed. With `--strict`, also any result that is unable to evaluate or any coverage gap. For `validate`, any invalid rule. |
+| `2` | Usage or environment error: not a git repository, missing rules directory, unknown ref or flag. |
 
-## Evidence report
+## Evidence reports
 
-`--format json` (or `--report-json`) produces a report with this shape:
+`--format json` or `--report-json <file>` writes a machine-readable report. It contains:
 
-- `schemaVersion`: `1`.
-- `tool`: `{ name, version }` of mottlefin.
-- `run`: `mode` (`diff`, `full`, `full-fallback`), `head` and `base` as `{ ref, sha }` (base `sha` is null if unresolved), `mergeBase`, `worktree`, `dirty`, `rulesDir`, `changedFiles` (path, status, oldPath, binary), and `notices` (for example `diff-unavailable`, `merge-base-unavailable`, `worktree-dirty`).
-- `summary`: counts for each status, `coverageGaps`, and `rules`.
-- `results`: one entry per rule, sorted by rule id. Each has `ruleId`, `ruleVersion`, `ruleDigest`, `ruleFile`, `title`, `severity`, `status`, `selection` (selected, certainty, reasons), `filesEvaluated`, `violations`, `preexistingViolations`, `coverageGaps`, and `error`.
-- Each violation has `file`, `line`, `column`, `match`, `excerpt`, and `message`.
+- **run**: mode, head and base `{ ref, sha }`, merge base, changed files, and notices.
+- **summary**: count per status, plus coverage gaps.
+- **results**: per rule, the id, version, digest and status. Each result also has the reasons it ran or was skipped, the files checked, violations (`file:line:column`, match, message), pre-existing violations, coverage gaps, and any error.
 
-**Determinism.** The report has no timestamps, absolute paths, or hostnames. The same commit and the same rule files produce a byte-identical JSON report. Run `run` twice and diff the output to confirm.
+The same commit and the same rules always produce byte-identical JSON. The report contains no timestamps or machine-specific paths.
 
-**Traceability.** Every result carries the rule `id`, `version`, and `digest`, so you know exactly which rule content was applied. The report carries the head and base SHAs, so you know which commit was evaluated. With `--worktree` and uncommitted changes, `dirty` is true and a `worktree-dirty` notice is added: the evidence then refers to the head SHA plus uncommitted content, which is not a commit-only result.
-
-Notices that qualify the evidence:
+**Notices** flag anything that weakens the evidence:
 
 | notice | meaning |
 |---|---|
-| `diff-unavailable` | base could not be resolved; every rule ran (`full-fallback`), selections are `uncertain` |
-| `merge-base-unavailable` | no common ancestor; the diff was taken from the base directly |
-| `worktree-dirty` | `--worktree` run; results include uncommitted changes |
-| `worktree-dirty-ignored` | the tree has uncommitted changes that were *not* evaluated (pass `--worktree` to include them) |
-| `rules-differ-from-head` | rules are read from the working tree, and some rule files there differ from the `--head` commit. The digests show what actually ran; check out the head commit for evidence that matches it. CI checks out the head, so this should not appear there. |
+| `diff-unavailable` | The base couldn't be resolved, so every rule ran. |
+| `merge-base-unavailable` | There is no common ancestor, so Mottlefin diffed against the base directly. |
+| `worktree-dirty` | Results include uncommitted changes (`--worktree`). |
+| `worktree-dirty-ignored` | There are uncommitted changes that were *not* checked. |
+| `rules-differ-from-head` | The rule files on disk differ from the commit being checked. |
 
-## Local usage
+## CI
+
+A complete GitHub Actions workflow is in [`examples/github-actions.yml`](examples/github-actions.yml). Copy it to `.github/workflows/mottlefin.yml` in the repo you want to check, and point its tool checkout at your copy of Mottlefin.
+
+What it does, and what any CI setup needs:
+
+1. **Full history.** Use `fetch-depth: 0`. The diff needs the base commit, and a shallow clone falls back to running every rule.
+2. **Explicit commits.** Pass `--base ${{ github.event.pull_request.base.sha }}` and `--head ${{ github.event.pull_request.head.sha }}`. Also check out the head SHA, so the rules on disk are the PR's version.
+3. **Reports that always post.** Write `--report-md` to `$GITHUB_STEP_SUMMARY`, and upload `--report-json` as an artifact. Run both steps with `if: always()`, and only then exit with Mottlefin's exit code.
+4. **Strict mode, optionally.** `--strict` also blocks the PR on rules that couldn't be evaluated and on coverage gaps. Leave it off if only real violations should block.
+
+On other CI systems the pattern is the same:
+- **GitLab:** pass `--base "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head "$CI_COMMIT_SHA"` with `GIT_DEPTH: 0`.
+- **Anywhere else:** run `git fetch origin main`, then `--base origin/main`.
+
+## Limitations
+
+- There is one check type, `forbid-pattern`: a line-by-line regex. A pattern can't span lines or understand code structure.
+- Rules are read from the working tree, not from the commit being checked. In CI, check out the head commit. Locally, the `rules-differ-from-head` notice warns you when the two differ.
+- There is no dashboard and no auto-fix.
+
+## Development
 
 ```sh
-# Check the last commit (HEAD against HEAD~1)
-node bin/mottlefin.js run --repo /path/to/app
-
-# Check a specific range
-node bin/mottlefin.js run --repo /path/to/app --base main --head feature/x
-
-# Check uncommitted changes against HEAD
-node bin/mottlefin.js run --repo /path/to/app --worktree
-
-# Run every rule over every file, ignoring the diff
-node bin/mottlefin.js run --repo /path/to/app --full
-
-# Check the rule files
-node bin/mottlefin.js validate --repo /path/to/app
+npm test         # unit tests plus end-to-end CLI tests
+npm run smoke    # end-to-end scenarios; writes reports to smoke-results/
 ```
 
-## CI setup
-
-The example workflow is in `examples/github-actions.yml`. The key points:
-
-**Fetch depth.** The diff needs the base commit. Use `fetch-depth: 0` in `actions/checkout`. With a shallow clone, the base cannot be resolved, the run falls back to `full-fallback`, and the report says so in its notices.
-
-**Pass the PR base and head explicitly.**
-
-- `--base ${{ github.event.pull_request.base.sha }}`
-- `--head ${{ github.event.pull_request.head.sha }}`
-
-`actions/checkout` checks out a merge commit by default for `pull_request` events. Passing `--head` explicitly keeps the evaluated commit the PR head, not the merge commit. The example also checks out the head SHA so that rules are read from the PR's version.
-
-**Reports.** Write `--report-json` (evidence, uploaded as an artifact) and `--report-md` (for humans). Append the Markdown to `$GITHUB_STEP_SUMMARY` so it appears on the run page.
-
-**Keep the report step running when the check fails.** Run mottlefin in a step that captures its exit code instead of failing immediately. Run the report and upload steps with `if: always()`. Finish with a step that exits with the captured code, so the job's final status is mottlefin's.
-
-**Blocking.** Add `--strict` to also block on `unable_to_evaluate` results and coverage gaps. Without it, only failed `error`-severity rules block.
-
-Minimal GitHub Actions sketch (see the example file for the full workflow):
-
-```yaml
-on: pull_request
-jobs:
-  mottlefin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: actions/checkout@v4
-        with:
-          repository: your-org/mottlefin
-          path: .mottlefin-tool
-      - id: check
-        shell: bash
-        run: |
-          set +e
-          node .mottlefin-tool/bin/mottlefin.js run --repo "$GITHUB_WORKSPACE" \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}" --strict \
-            --report-json "$RUNNER_TEMP/mottlefin/report.json" \
-            --report-md "$RUNNER_TEMP/mottlefin/report.md"
-          echo "code=$?" >> "$GITHUB_OUTPUT"
-      - if: always()
-        run: cat "$RUNNER_TEMP/mottlefin/report.md" >> "$GITHUB_STEP_SUMMARY"
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mottlefin-evidence
-          path: ${{ runner.temp }}/mottlefin/
-      - if: always()
-        run: exit ${{ steps.check.outputs.code }}
-```
-
-**Other CI systems.** The same pattern applies anywhere:
-
-- GitLab merge requests: `--base "$CI_MERGE_REQUEST_DIFF_BASE_SHA"` and `--head "$CI_COMMIT_SHA"`. Fetch full history (`GIT_DEPTH: 0`).
-- Any CI: fetch the base branch explicitly, then diff against it: `git fetch origin main`, then `--base origin/main`.
-
-Whatever the system, keep the report step unconditional and exit with mottlefin's code last.
-
-## Limitations of this version
-
-- One check type: `forbid-pattern`. Rules that use another type report `unable_to_evaluate`.
-- Checks are line-based regexes. A pattern cannot match across lines.
-- No inline suppressions beyond `check.allow` patterns.
-- Rules are read from the working tree, not from the commit being checked. In CI, check out the head so the rules match the PR. Each result's digest records what ran.
-- No dashboard, no auto-fix, no AST-based checks.
+The tests build a small Git repository with known commits (`fixture/setup.mjs`). They check three cases: a relevant change selects the rule, an unrelated change skips it, and a deliberate regression fails at the right line. `PLAN.md` holds the design, the internal interfaces and the acceptance criteria.
