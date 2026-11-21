@@ -1,7 +1,7 @@
 # Mottlefin design-system checks on pull requests.
 #
-# Mottlefin is checked out into .mottlefin-tool from a placeholder repository.
-# Replace `your-org/mottlefin` with the repository that hosts your copy. If the
+# Mottlefin is checked out into .mottlefin-tool from legaspi21/mottlefin.
+# To use a fork, change `repository` in the tool checkout step. If the
 # repository is private, add a token input (for example
 # `token: ${{ secrets.MOTTLEFIN_READ_TOKEN }}`) to the tool checkout step.
 #
@@ -39,7 +39,7 @@ jobs:
       - name: Check out mottlefin
         uses: actions/checkout@v4
         with:
-          repository: your-org/mottlefin
+          repository: legaspi21/mottlefin
           path: .mottlefin-tool
 
       - name: Run mottlefin

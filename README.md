@@ -25,7 +25,7 @@ Blocking failures: color/no-raw-hex
 ## Install
 
 ```sh
-git clone https://github.com/<you>/mottlefin.git
+git clone https://github.com/legaspi21/mottlefin.git
 cd mottlefin
 npm link          # optional: puts `mottlefin` on your PATH
 ```
@@ -194,7 +194,7 @@ The same commit and the same rules always produce byte-identical JSON. The repor
 
 ## CI
 
-A complete GitHub Actions workflow is in [`examples/github-actions.yml`](examples/github-actions.yml). Copy it to `.github/workflows/mottlefin.yml` in the repo you want to check, and point its tool checkout at your copy of Mottlefin.
+A complete GitHub Actions workflow is in [`examples/github-actions.yml`](examples/github-actions.yml). Copy it to `.github/workflows/mottlefin.yml` in the repo you want to check. It fetches Mottlefin from `legaspi21/mottlefin`; change that line to use a fork.
 
 What it does, and what any CI setup needs:
 
